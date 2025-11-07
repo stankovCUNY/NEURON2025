@@ -1,0 +1,889 @@
+function UtkuRunSpWaveAnaMedianSplit(metric,dayNo,pairNo,testType)
+
+    %% metric option:
+    
+    % 'troughAmplitude'
+    % 'peakToTrough'
+    % 'halfWidth'
+    % 'spikeWidth'
+    
+    % Nov 5, 2023
+
+    UtkuData      = loadUtkuV2(dayNo); % NOTE: spike time data is in minutes!!!
+    pairType      = 'exquisite';
+    nullFlag      = false;
+    filteredPairs = UtkuScreenJitterV2(dayNo,pairType,nullFlag);
+    
+    %% hardcoding pairs of interest for waveform analysis
+
+    % constants
+    jscale         = 1;
+    alpha_name     = 5;
+    duration       = 0.01;
+    fpass          = 300;
+    fig_use        = 102;
+    njitter        = 500;
+    alpha          = 0.05;
+    for_grant      = false;
+    filterFlag     = false;
+    Nwaveforms     = 100;
+    resolution_use = '-r300'; % >= 300dpi required by Nature Neuro, so that's what I'm using
+    fs             = 30000;
+    binSize        = 1/fs;
+    
+    channelLayout = {[1:32],[33:64],[65:96],[97:128],[129:160],[161:192]}; 
+    
+    preLength  = 36;
+    postLength = 36;
+
+    lfpDownsampleFactor = 100;
+
+    preLengthLFP  = fs/lfpDownsampleFactor;
+    postLengthLFP = fs/lfpDownsampleFactor;
+
+    tLFP = (-(preLengthLFP-1):postLengthLFP)/((fs)/lfpDownsampleFactor);
+    
+    % organizing and plotting variabls
+    waveTimeShort   = UtkuData.cell_metrics.waveforms.time{1,1};     % 48 time points
+    waveTimeLong    = UtkuData.cell_metrics.waveforms.time_all{1,1}; % 72 time points
+%     waveTimeLong    = waveTimeLong(1+9:end-9);
+    electrodeGroups = UtkuData.cell_metrics.general.electrodeGroups; 
+
+    figpath     = '/media/nasko/3ce6d8b6-2570-4c8f-941f-9b4b0641301c/home/nasko/CUNY_Work_Han_Kamran_Utku_dataV2/figures';
+    UtkuPath    = '/media/nasko/3ce6d8b6-2570-4c8f-941f-9b4b0641301c/home/nasko/CUNY_Work_Han_Kamran_Utku_dataV2/data/';
+    
+    day = str2double(dayNo);
+    if day == 1
+        datapath = [UtkuPath 'AG_2019-12-23_NSD' '/'];
+    elseif day == 2
+        datapath = [UtkuPath 'AG_2019-12-27_NSD' '/'];
+    end 
+    
+    if isempty(pairNo)
+        % Monitor specific plot settings.
+        screensize = get(0,'screensize');
+        % initiate figure
+        hcomb = figure(102);
+    
+        res_type = 'QHD';
+        pos = [70 230 2660 1860]; a_offset = [0 850 100 900]'; b_offset = [0 0 -100 -100]';
+        arrayfun(@(a) set(a, 'Position', pos), hcomb(:));
+    end
+    
+    %% save variables
+    medSplit.pairs       = [];
+    medSplit.metric      = metric;
+    medSplit.refAboveMed = {};
+    medSplit.refBelowMed = {};
+    medSplit.tarAboveMed = {};
+    medSplit.tarBelowMed = {};
+    medSplit.refCh       = [];
+    medSplit.tarCh       = [];
+    
+    %% using loop for all vs one pairs
+    if isempty(pairNo)
+        startLoop = 1;
+        endLoop   = size(filteredPairs,1);
+    else 
+        startLoop = pairNo;
+        endLoop   = pairNo;
+    end 
+
+    for i = startLoop:endLoop
+        
+        if isempty(pairNo)
+            tiledlayout(7,2)
+        end
+        
+        %%
+
+        res1    = UtkuData.cell_metrics.spikes.times{1,filteredPairs(i,1)};
+        res2    = UtkuData.cell_metrics.spikes.times{1,filteredPairs(i,2)};
+
+        cellID1 = UtkuData.cell_metrics.UID(filteredPairs(i,1));
+        cellID2 = UtkuData.cell_metrics.UID(filteredPairs(i,2));
+
+        ch1     = UtkuData.cell_metrics.maxWaveformCh1(filteredPairs(i,1));
+        ch2     = UtkuData.cell_metrics.maxWaveformCh1(filteredPairs(i,2));
+
+        clu1    = UtkuData.cell_metrics.cluID(filteredPairs(i,1));
+        clu2    = UtkuData.cell_metrics.cluID(filteredPairs(i,2));
+        
+        shank1  = UtkuData.cell_metrics.shankID(filteredPairs(i,1));
+        shank2  = UtkuData.cell_metrics.shankID(filteredPairs(i,2));
+        
+        cell1type = UtkuData.cell_metrics.putativeCellType{1,filteredPairs(i,1)};
+        cell2type = UtkuData.cell_metrics.putativeCellType{1,filteredPairs(i,2)};
+        
+        region1 = UtkuData.cell_metrics.brainRegion{1,filteredPairs(i,1)}; 
+        region2 = UtkuData.cell_metrics.brainRegion{1,filteredPairs(i,2)};
+        
+        cell1waveform = UtkuData.cell_metrics.waveforms.filt_all{1,filteredPairs(i,1)};
+        cell2waveform = UtkuData.cell_metrics.waveforms.filt_all{1,filteredPairs(i,2)};
+        
+        waveform1Idx = find(electrodeGroups{1,shank1} == ch1);
+        waveform2Idx = find(electrodeGroups{1,shank2} == ch2);
+        
+        if strcmp(cell1type,'Pyramidal Cell')
+            cell1type = 'p';
+        elseif strcmp(cell1type,'Narrow Interneuron')
+            cell1type = 'i-narrow';
+        elseif strcmp(cell1type,'Wide Interneuron')
+            cell1type = 'i-wide';
+        end
+        
+        if strcmp(cell2type,'Pyramidal Cell')
+            cell2type = 'p';
+        elseif strcmp(cell2type,'Narrow Interneuron')
+            cell2type = 'i-narrow';
+        elseif strcmp(cell2type,'Wide Interneuron')
+            cell2type = 'i-wide';
+        end
+        
+        medSplit.pairs = [medSplit.pairs; [cellID1 cellID2]];
+        
+        %%
+        
+        chanDataAtCell1 = UtkuLoad300hz(dayNo,shank1,ch1);
+        % chanDataAtCell1 = UtkuLoadUnfiltChanData(dayNo,shank1,ch1);
+
+        pairStr = [num2str(cellID1) cell1type ' (ch: ' num2str(ch1) ', sh: ' num2str(shank1) ')' ' v ' ...
+                   num2str(cellID2) cell2type ' (ch: ' num2str(ch2) ', sh: ' num2str(shank2) ')'];
+        refStr  = [num2str(cellID1) cell1type ' (ch: ' num2str(ch1) ', sh: ' num2str(shank1) ')'];
+        tarStr  = [num2str(cellID2) cell2type ' (ch: ' num2str(ch2) ', sh: ' num2str(shank2) ')'];
+
+        saveStr = ['AG' dayNo '  (median split - ' metric ') - '  num2str(cellID1) cell1type ' (ch: ' num2str(ch1) ', sh: ' num2str(shank1) ', region: ' region1 ')' ' v ' ...
+                                                         num2str(cellID2) cell2type ' (ch: ' num2str(ch2) ', sh: ' num2str(shank2) ', region: ' region2 ')'];
+
+        % get waveforms
+        spikeTimeIndxCell1 = round(res1*fs) + 1; 
+        [spikeAvgMaxChanCell1, waveformsMaxCell1] = waveformAvg(chanDataAtCell1,spikeTimeIndxCell1,preLength,postLength,fpass,fs,filterFlag,false);    
+        dataTemp = downsample(chanDataAtCell1,lfpDownsampleFactor);
+        [lfpAvgMaxChanCell1,lfpMaxCell1]         = waveformAvg(dataTemp,round(spikeTimeIndxCell1/lfpDownsampleFactor),preLengthLFP,postLengthLFP,300,fs,false,false);
+        clear chanDataAtCell1
+        clear dataTemp
+
+        if strcmp(metric,'troughAmplitude')
+
+            troughMins     = min(waveformsMaxCell1(preLength-14:preLength+14,:));
+            % medianForSplit = median(troughMins);
+            % 
+            % aboveMedBin    = troughMins > medianForSplit;
+            % belowMedBin    = troughMins < medianForSplit;
+
+            % use quartiles for median split 
+            Q = quantile(troughMins,[0.25, 0.5, 0.75]);
+
+            aboveMedBin    = troughMins > Q(3);
+            belowMedBin    = troughMins < Q(1);
+            
+            surrIdx = [];
+            for loopSurr = 1:1000 
+                surrIdx = [surrIdx; sort(randperm(length(troughMins),sum(aboveMedBin)))];
+            end
+
+            if isempty(pairNo)
+                nexttile(1)
+                histogram(troughMins)
+                xline(medianForSplit,'r','median','LineWidth',1)
+            end
+
+        elseif strcmp(metric,'peakToTrough')
+
+            troughMins     = min(waveformsMaxCell1(preLength-14:preLength+14,:));
+            peakMax        = max(waveformsMaxCell1(preLength:preLength+14,:));
+
+            peakToTrough   = peakMax - troughMins;
+            medianForSplit = median(peakToTrough);
+
+            aboveMedBin    = peakToTrough > medianForSplit;
+            belowMedBin    = peakToTrough < medianForSplit;
+            
+            if isempty(pairNo)
+                nexttile(1)
+                histogram(peakToTrough)
+                xline(medianForSplit,'r','median','LineWidth',1)
+            end
+
+        elseif strcmp(metric,'halfWidth')
+
+            troughMins     = min(waveformsMaxCell1(preLength-14:preLength+14,:));
+
+            peakToBaseline        = mean(waveformsMaxCell1(1:preLength,:)) - troughMins;
+            peakToBaselineHalf    = peakToBaseline/2;
+            peakToBaselineHalfAdj = peakToBaselineHalf + troughMins;
+
+            [~,idxRight] = min(abs(waveformsMaxCell1(preLength:preLength+14,:) - peakToBaselineHalfAdj));
+            [~,idxLeft]  = min(abs(waveformsMaxCell1(preLength-14-1:preLength-1,:) - peakToBaselineHalfAdj));
+
+            idxRight = idxRight + preLength;
+            idxLeft  = idxLeft  + (preLength-14);
+
+            timeHalfWidthRight = waveTimeLong(idxRight);
+            timeHalfWidthLeft  = waveTimeLong(idxLeft);
+
+            halfWidth = timeHalfWidthRight - timeHalfWidthLeft;
+
+            % medianForSplit = median(halfWidth);
+  
+            % aboveMedBin    = halfWidth > medianForSplit;
+            % belowMedBin    = halfWidth < medianForSplit;
+
+            % use quartiles for median split 
+            Q = quantile(halfWidth,[0.25, 0.5, 0.75]);
+
+            aboveMedBin    = halfWidth > Q(3);
+            belowMedBin    = halfWidth < Q(1);
+
+            surrIdx = [];
+            for loopSurr = 1:1000 
+                surrIdx = [surrIdx; sort(randperm(length(halfWidth),sum(aboveMedBin)))];
+            end
+            
+            if isempty(pairNo)
+                nexttile(1)
+                histogram(halfWidth)
+                xline(medianForSplit,'r','median','LineWidth',1)
+            end
+
+        elseif strcmp(metric,'spikeWidth')
+
+            [~,idxTrough]     = min(waveformsMaxCell1(preLength-14:preLength+14,:));
+            [~,idxPeak]       = max(waveformsMaxCell1(preLength:preLength+14,:));
+
+            timeTrough = waveTimeLong(idxTrough + preLength-14);
+            timePeak   = waveTimeLong(idxPeak   + preLength);
+
+            spikeWidth = timePeak - timeTrough;
+
+            medianForSplit = median(spikeWidth);
+
+            aboveMedBin    = spikeWidth > medianForSplit;
+            belowMedBin    = spikeWidth < medianForSplit;
+                    
+            if isempty(pairNo)
+                nexttile(1)
+                histogram(spikeWidth)
+                xline(medianForSplit,'r','median','LineWidth',1)
+            end
+
+        end
+
+        if isempty(pairNo)
+            title(['eSpike: ' num2str(cellID1) cell1type ' (ch: ' num2str(ch1) ', sh: ' num2str(shank1) ', region: ' region1 ' ) metric: ' metric])
+        end 
+
+        resAboveMed  = res1(aboveMedBin);
+        resBelowMed  = res1(belowMedBin);
+        
+        medSplit.refAboveMed{i} = resAboveMed;
+        medSplit.refBelowMed{i} = resBelowMed;
+        medSplit.refCh          = [medSplit.refCh ch1];
+        medSplit.tarCh          = [medSplit.tarCh ch2];
+    
+        waveAboveMed = waveformsMaxCell1(:,aboveMedBin);
+        waveBelowMed = waveformsMaxCell1(:,belowMedBin);
+        
+        waveAboveMedRandIdx = randperm(size(waveAboveMed,2),Nwaveforms);
+        waveBelowMedRandIdx = randperm(size(waveBelowMed,2),Nwaveforms);
+
+        lfpAboveMed  = lfpMaxCell1(:,aboveMedBin(1:size(lfpMaxCell1,2)));
+        lfpBelowMed  = lfpMaxCell1(:,belowMedBin(1:size(lfpMaxCell1,2)));
+        
+        if (size(waveAboveMed,2) < Nwaveforms) || (size(waveBelowMed,2) < Nwaveforms)
+            continue
+        else
+            waveAboveMedRandIdx = randperm(size(waveAboveMed,2),Nwaveforms);
+            waveBelowMedRandIdx = randperm(size(waveBelowMed,2),Nwaveforms);
+        end
+
+        % hcomb = figure(102);
+        [GSPExc,GSPInh,pvalE,pvalI,ccgR,tR,LSPExc,LSPInh,JBSIE,JBSII] = ...
+          CCG_jitter(res1,res2,fs,binSize,duration,'jscale',jscale, ...
+                        'plot_flag', false, ...
+                        'plot_output', get(fig_use, 'Number'), ...
+                        'njitter', njitter, 'alpha', alpha,...
+                        'for_grant', for_grant,  'plot_pointwiseBands',false);
+
+        % hcomb = figure(102);
+        [GSPExc,GSPInh,pvalE,pvalI,ccgRabove,tR,LSPExc,LSPInh,JBSIE,JBSII] = ...
+          CCG_jitter(resAboveMed,res2,fs,binSize,duration,'jscale',jscale, ...
+                        'plot_flag', false, ...
+                        'plot_output', get(fig_use, 'Number'), ...
+                        'njitter', njitter, 'alpha', alpha,...
+                        'for_grant', for_grant,  'plot_pointwiseBands',false);
+
+        % hcomb = figure(102);
+        [GSPExc,GSPInh,pvalE,pvalI,ccgRbelow,tR,LSPExc,LSPInh,JBSIE,JBSII] = ...
+          CCG_jitter(resBelowMed,res2,fs,binSize,duration,'jscale',jscale, ...
+                        'plot_flag', false, ...
+                        'plot_output', get(fig_use, 'Number'), ...
+                        'njitter', njitter, 'alpha', alpha,...
+                        'for_grant', for_grant,  'plot_pointwiseBands',false);
+     
+        for loopSurr = 1:1000 
+            [ccgRtemp, tR] = CCG([res1(surrIdx(loopSurr,:));res2],[ones(size(res1(surrIdx(loopSurr,:))));2*ones(size(res2))], ...
+                    'binSize', binSize, 'duration', duration, 'Fs', 1/fs,...
+                    'norm', 'counts');
+
+            ccgj(:,loopSurr) = ccgRtemp(:,1,2);
+        end
+        
+        if strcmp(testType,'noMinus')
+
+            [aPoint, bPoint, aSim, bSim, ~, ~] = ... 
+                computeBandsV2(ccgR(:,1,2),ccgj,tR);
+
+        elseif strcmp(testType,'minus')
+
+            ccgRdiff = ccgRbelow(:,1,2)/sum(ccgRbelow(:,1,2))-ccgRabove(:,1,2)/sum(ccgRabove(:,1,2));
+            
+            ccgjDiff = [];
+            for loopSurr = 1:500
+                ccgjDiff = [ccgjDiff ccgj(:,loopSurr)/sum(ccgj(:,loopSurr)) - ccgj(:,loopSurr + 500)/sum(ccgj(:,loopSurr + 500))];
+            end
+    
+            [aPoint, bPoint, aSim, bSim, ~, ~] = ... 
+                computeBandsV2(ccgRdiff,ccgjDiff,tR);
+
+        end 
+
+        tRms = tR*1000;
+
+        if isempty(pairNo)
+
+            nexttile(3)
+            patchline(waveTimeLong,waveAboveMed(:,waveAboveMedRandIdx(1)),'EdgeColor','#D95319','LineWidth',0.25,'EdgeAlpha',1);
+            hold on
+            for k = 2:Nwaveforms
+                patchline(waveTimeLong,waveAboveMed(:,waveAboveMedRandIdx(k)),'EdgeColor','#D95319','LineWidth',0.25,'EdgeAlpha',1);
+            end
+            hold off
+            set(gca,'YDir','reverse')
+            title(['above median (n = ' num2str(size(waveAboveMed,2)) ')'])
+            
+            nexttile(5)
+            patchline(waveTimeLong,waveBelowMed(:,waveBelowMedRandIdx(1)),'EdgeColor','#EDB120','LineWidth',0.25,'EdgeAlpha',1);
+            hold on
+            for k = 2:Nwaveforms
+                patchline(waveTimeLong,waveBelowMed(:,waveBelowMedRandIdx(k)),'EdgeColor','#EDB120','LineWidth',0.25,'EdgeAlpha',1);
+            end
+            hold off
+            set(gca,'YDir','reverse')
+            title(['below median (n = ' num2str(size(waveBelowMed,2)) ')'])
+            
+            nexttile(7)
+            plot(waveTimeLong,spikeAvgMaxChanCell1,'LineWidth',1)
+            hold on
+            plot(waveTimeLong,mean(waveAboveMed,2),'LineWidth',1);
+            plot(waveTimeLong,mean(waveBelowMed,2),'LineWidth',1);
+            hold off
+            set(gca,'YDir','reverse')
+            legend(['all (n = ' num2str(size(waveformsMaxCell1,2)) ')'], ...
+                   ['above median (n = ' num2str(size(waveAboveMed,2)) ')'], ...
+                   ['below median (n = ' num2str(size(waveBelowMed,2)) ')'])
+    
+            nexttile(9)
+    %         plot(tR*1000,ccgR(:,1,2)/2,'LineWidth',1)
+            plot(tR*1000,ccgR(:,1,2)/sum(ccgR(:,1,2)),'LineWidth',1)
+            hold on
+    %         plot(tR*1000,ccgRabove(:,1,2)*(0.5*(size(waveformsMaxCell1,2)/size(waveAboveMed,2))),'LineWidth',1)
+    %         plot(tR*1000,ccgRbelow(:,1,2)*(0.5*(size(waveformsMaxCell1,2)/size(waveBelowMed,2))),'LineWidth',1)
+            plot(tR*1000,ccgRabove(:,1,2)/sum(ccgRabove(:,1,2)),'LineWidth',1)
+            plot(tR*1000,ccgRbelow(:,1,2)/sum(ccgRbelow(:,1,2)),'LineWidth',1)
+            hold off
+            title(['normalized CCG: ' pairStr])
+            legend('all','above median','below median')
+            
+            nexttile(11)
+    %         plot(tR*1000,ccgR(:,1,1)/2,'LineWidth',1)
+            plot(tR*1000,ccgR(:,1,1)/sum(ccgR(:,1,1)),'LineWidth',1)
+            hold on
+    %         plot(tR*1000,ccgRabove(:,1,1)*(0.5*(size(waveformsMaxCell1,2)/size(waveAboveMed,2))),'LineWidth',1)
+    %         plot(tR*1000,ccgRbelow(:,1,1)*(0.5*(size(waveformsMaxCell1,2)/size(waveBelowMed,2))),'LineWidth',1)
+            plot(tR*1000,ccgRabove(:,1,1)/sum(ccgRabove(:,1,1)),'LineWidth',1)
+            plot(tR*1000,ccgRbelow(:,1,1)/sum(ccgRbelow(:,1,1)),'LineWidth',1)
+            hold off
+            title(['normalized ACG: ' num2str(cellID1) cell1type ' (ch: ' num2str(ch1) ', sh: ' num2str(shank1) ')'])
+            legend('all','above median','below median')
+            
+            nexttile(13)
+            plot(tLFP,lfpAvgMaxChanCell1,'LineWidth',1)
+            hold on
+            plot(tLFP,mean(lfpAboveMed,2),'LineWidth',1);
+            plot(tLFP,mean(lfpBelowMed,2),'LineWidth',1);
+            plot(tLFP,mean(lfpBelowMed,2)-mean(lfpAboveMed,2),'LineWidth',1);
+            hold off
+            set(gca,'YDir','reverse')
+            title('spike-triggered LFP')
+            legend('all','above median','below median','below median-above median')
+
+        else
+            if (pairNo == 8) & strcmp(dayNo,'1')
+                nexttile(1)
+            elseif pairNo == 71 & strcmp(dayNo,'2')
+                nexttile(3)
+            elseif pairNo == 20 & strcmp(dayNo,'1')
+                nexttile(9)
+            elseif pairNo == 24 & strcmp(dayNo,'1')
+                nexttile(11)
+            end
+            plot(waveTimeLong,spikeAvgMaxChanCell1,'k','LineWidth',1)
+            hold on
+            plot(waveTimeLong,mean(waveAboveMed,2),'LineWidth',1);
+            plot(waveTimeLong,mean(waveBelowMed,2),'LineWidth',1);
+            hold off
+            xlim([-1 1])
+            ylabel('[mV]')
+            xlabel('[ms]')
+            title({['Rat AG day ' dayNo ' waveform: '],refStr})
+            set(gca,'YDir','reverse')
+            % legend(['all (n = ' num2str(size(waveformsMaxCell1,2)) ')'], ...
+            %        ['above median (n = ' num2str(size(waveAboveMed,2)) ')'], ...
+            %        ['below median (n = ' num2str(size(waveBelowMed,2)) ')'])
+            if pairNo == 20
+                % legend('all','> med','< med')
+                if strcmp(testType,'noMinus')
+                    legend('all','Q_4','Q_1')
+                elseif strcmp(testType,'minus')
+                    legend('Q_4 - Q_1')
+                end 
+                
+            end
+            box off
+            set(gca,'FontSize',5)
+            set(gca,'FontName','Arial')
+            
+            if (pairNo == 8) & strcmp(dayNo,'1')
+                nexttile(5)
+            elseif pairNo == 71 & strcmp(dayNo,'2')
+                nexttile(7)
+            elseif pairNo == 20 & strcmp(dayNo,'1')
+                nexttile(13)
+            elseif pairNo == 24 & strcmp(dayNo,'1')
+                nexttile(15)
+            end
+
+            if strcmp(testType,'noMinus')
+                %         plot(tR*1000,ccgR(:,1,2)/2,'LineWidth',1)
+                % patch([tRms; flipud(tRms)],[aSim/sum(mean(ccgj,2));   flipud(bSim/sum(mean(ccgj,2)))],   [200 200 200]/255,'EdgeAlpha',0); % simultaneous bands
+                patch([tRms; flipud(tRms)],[aPoint/sum(mean(ccgj,2)); flipud(bPoint/sum(mean(ccgj,2)))], [200 200 200]/255,'EdgeAlpha',0); % point-wise bands
+            
+                hold on
+                plot(tR*1000,ccgR(:,1,2)/sum(ccgR(:,1,2)),'k','LineWidth',1)
+        %         plot(tR*1000,ccgRabove(:,1,2)*(0.5*(size(waveformsMaxCell1,2)/size(waveAboveMed,2))),'LineWidth',1)
+        %         plot(tR*1000,ccgRbelow(:,1,2)*(0.5*(size(waveformsMaxCell1,2)/size(waveBelowMed,2))),'LineWidth',1)
+                plot(tR*1000,ccgRabove(:,1,2)/sum(ccgRabove(:,1,2)),'LineWidth',1)
+                plot(tR*1000,ccgRbelow(:,1,2)/sum(ccgRbelow(:,1,2)),'LineWidth',1)
+                hold off
+            elseif strcmp(testType,'minus')
+                % patch([tRms; flipud(tRms)],[aSim;   flipud(bSim)],   [200 200 200]/255,'EdgeAlpha',0); % simultaneous bands
+                patch([tRms; flipud(tRms)],[aPoint; flipud(bPoint)], [200 200 200]/255,'EdgeAlpha',0); % point-wise bands
+                hold on 
+                plot(tR*1000,ccgRdiff,'k','LineWidth',1)
+                hold off
+            end 
+
+            xlim([-1 1])
+            ylabel('Spike Probability')
+            xlabel('[ms]')
+            title({['CCG: ', refStr],tarStr,newline})
+            % legend('all','above median','below median')
+            box off
+            set(gca,'FontSize',5)
+            set(gca,'FontName','Arial')
+
+        end
+
+        %%
+
+        res2    = UtkuData.cell_metrics.spikes.times{1,filteredPairs(i,1)};
+        res1    = UtkuData.cell_metrics.spikes.times{1,filteredPairs(i,2)};
+
+        cellID2 = UtkuData.cell_metrics.UID(filteredPairs(i,1));
+        cellID1 = UtkuData.cell_metrics.UID(filteredPairs(i,2));
+
+        ch2     = UtkuData.cell_metrics.maxWaveformCh1(filteredPairs(i,1));
+        ch1     = UtkuData.cell_metrics.maxWaveformCh1(filteredPairs(i,2));
+
+        clu2    = UtkuData.cell_metrics.cluID(filteredPairs(i,1));
+        clu1    = UtkuData.cell_metrics.cluID(filteredPairs(i,2));
+        
+        shank2  = UtkuData.cell_metrics.shankID(filteredPairs(i,1));
+        shank1  = UtkuData.cell_metrics.shankID(filteredPairs(i,2));
+        
+        cell2type = UtkuData.cell_metrics.putativeCellType{1,filteredPairs(i,1)};
+        cell1type = UtkuData.cell_metrics.putativeCellType{1,filteredPairs(i,2)};
+        
+        region2 = UtkuData.cell_metrics.brainRegion{1,filteredPairs(i,1)}; 
+        region1 = UtkuData.cell_metrics.brainRegion{1,filteredPairs(i,2)};
+        
+        cell2waveform = UtkuData.cell_metrics.waveforms.filt_all{1,filteredPairs(i,1)};
+        cell1waveform = UtkuData.cell_metrics.waveforms.filt_all{1,filteredPairs(i,2)};
+        
+        waveform2Idx = find(electrodeGroups{1,shank1} == ch1);
+        waveform1Idx = find(electrodeGroups{1,shank2} == ch2);
+        
+        if strcmp(cell1type,'Pyramidal Cell')
+            cell1type = 'p';
+        elseif strcmp(cell1type,'Narrow Interneuron')
+            cell1type = 'i-narrow';
+        elseif strcmp(cell1type,'Wide Interneuron')
+            cell1type = 'i-wide';
+        end
+        
+        if strcmp(cell2type,'Pyramidal Cell')
+            cell2type = 'p';
+        elseif strcmp(cell2type,'Narrow Interneuron')
+            cell2type = 'i-narrow';
+        elseif strcmp(cell2type,'Wide Interneuron')
+            cell2type = 'i-wide';
+        end
+
+        chanDataAtCell1 = UtkuLoad300hz(dayNo,shank1,ch1);
+        % chanDataAtCell1 = UtkuLoadUnfiltChanData(dayNo,shank1,ch1);
+
+        pairStr = [num2str(cellID1) cell1type ' (ch: ' num2str(ch1) ', sh: ' num2str(shank1) ')' ' v ' ...
+                   num2str(cellID2) cell2type ' (ch: ' num2str(ch2) ', sh: ' num2str(shank2) ')'];
+        refStr  = [num2str(cellID1) cell1type ' (ch: ' num2str(ch1) ', sh: ' num2str(shank1) ')'];
+        tarStr  = [num2str(cellID2) cell2type ' (ch: ' num2str(ch2) ', sh: ' num2str(shank2) ')'];
+
+        res1sync = [];
+        res2sync = [];
+
+        % get waveforms
+        spikeTimeIndxCell1 = round(res1*fs) + 1; 
+        [spikeAvgMaxChanCell1, waveformsMaxCell1] = waveformAvg(chanDataAtCell1,spikeTimeIndxCell1,preLength,postLength,fpass,fs,filterFlag,false);    
+        dataTemp = downsample(chanDataAtCell1,lfpDownsampleFactor);
+        [lfpAvgMaxChanCell1,lfpMaxCell1]         = waveformAvg(dataTemp,round(spikeTimeIndxCell1/lfpDownsampleFactor),preLengthLFP,postLengthLFP,300,fs,false,false);
+        clear chanDataAtCell1
+        clear dataTemp
+
+        if strcmp(metric,'troughAmplitude')
+
+             troughMins     = min(waveformsMaxCell1(preLength-14:preLength+14,:));
+            % medianForSplit = median(troughMins);
+            % 
+            % aboveMedBin    = troughMins > medianForSplit;
+            % belowMedBin    = troughMins < medianForSplit;
+
+            % use quartiles for median split 
+            Q = quantile(troughMins,[0.25, 0.5, 0.75]);
+
+            aboveMedBin    = troughMins > Q(3);
+            belowMedBin    = troughMins < Q(1);
+
+            surrIdx = [];
+            for loopSurr = 1:1000 
+                surrIdx = [surrIdx; sort(randperm(length(troughMins),sum(aboveMedBin)))];
+            end
+            
+        elseif strcmp(metric,'peakToTrough')
+
+            troughMins     = min(waveformsMaxCell1(preLength-14:preLength+14,:));
+            peakMax        = max(waveformsMaxCell1(preLength:preLength+14,:));
+
+            peakToTrough   = peakMax - troughMins;
+            medianForSplit = median(peakToTrough);
+
+            aboveMedBin    = peakToTrough > medianForSplit;
+            belowMedBin    = peakToTrough < medianForSplit;
+            
+            if isempty(pairNo)
+                nexttile(2)
+                histogram(peakToTrough)
+                xline(medianForSplit,'r','median','LineWidth',1)
+            end
+
+        elseif strcmp(metric,'halfWidth')
+
+            troughMins     = min(waveformsMaxCell1(preLength-14:preLength+14,:));
+
+            peakToBaseline        = mean(waveformsMaxCell1(1:preLength,:)) - troughMins;
+            peakToBaselineHalf    = peakToBaseline/2;
+            peakToBaselineHalfAdj = peakToBaselineHalf + troughMins;
+
+            [~,idxRight] = min(abs(waveformsMaxCell1(preLength:preLength+14,:) - peakToBaselineHalfAdj));
+            [~,idxLeft]  = min(abs(waveformsMaxCell1(preLength-14-1:preLength-1,:) - peakToBaselineHalfAdj));
+
+            idxRight = idxRight + preLength;
+            idxLeft  = idxLeft  + (preLength-14);
+
+            timeHalfWidthRight = waveTimeLong(idxRight);
+            timeHalfWidthLeft  = waveTimeLong(idxLeft);
+
+            halfWidth = timeHalfWidthRight - timeHalfWidthLeft;
+
+            % medianForSplit = median(halfWidth);
+  
+            % aboveMedBin    = halfWidth > medianForSplit;
+            % belowMedBin    = halfWidth < medianForSplit;
+
+            % use quartiles for median split 
+            Q = quantile(halfWidth,[0.25, 0.5, 0.75]);
+
+            aboveMedBin    = halfWidth > Q(3);
+            belowMedBin    = halfWidth < Q(1);
+
+            surrIdx = [];
+            for loopSurr = 1:1000 
+                surrIdx = [surrIdx; sort(randperm(length(halfWidth),sum(aboveMedBin)))];
+            end
+            
+            if isempty(pairNo)
+                nexttile(1)
+                histogram(halfWidth)
+                xline(medianForSplit,'r','median','LineWidth',1)
+            end
+
+        elseif strcmp(metric,'spikeWidth')
+
+            [~,idxTrough]     = min(waveformsMaxCell1(preLength-14:preLength+14,:));
+            [~,idxPeak]       = max(waveformsMaxCell1(preLength:preLength+14,:));
+
+            timeTrough = waveTimeLong(idxTrough + preLength-14);
+            timePeak   = waveTimeLong(idxPeak   + preLength);
+
+            spikeWidth = timePeak - timeTrough;
+
+            medianForSplit = median(spikeWidth);
+
+            aboveMedBin    = spikeWidth > medianForSplit;
+            belowMedBin    = spikeWidth < medianForSplit;
+    
+            if isempty(pairNo)
+                nexttile(2)
+                histogram(spikeWidth)
+                xline(medianForSplit,'r','median','LineWidth',1)
+            end
+
+        end
+
+        if isempty(pairNo)
+            title(['eSpike: ' num2str(cellID1) cell1type ' (ch: ' num2str(ch1) ', sh: ' num2str(shank1) ', region: ' region1 ' ) metric: ' metric])
+        end
+
+        resAboveMed  = res1(aboveMedBin);
+        resBelowMed  = res1(belowMedBin);
+        
+        medSplit.tarAboveMed{i} = resAboveMed;
+        medSplit.tarBelowMed{i} = resBelowMed;
+
+        waveAboveMed = waveformsMaxCell1(:,aboveMedBin);
+        waveBelowMed = waveformsMaxCell1(:,belowMedBin);
+        
+        waveAboveMedRandIdx = randperm(size(waveAboveMed,2),Nwaveforms);
+        waveBelowMedRandIdx = randperm(size(waveBelowMed,2),Nwaveforms);
+
+        lfpAboveMed  = lfpMaxCell1(:,aboveMedBin(1:size(lfpMaxCell1,2)));
+        lfpBelowMed  = lfpMaxCell1(:,belowMedBin(1:size(lfpMaxCell1,2)));
+        
+        % hcomb = figure(102);
+        [GSPExc,GSPInh,pvalE,pvalI,ccgR,tR,LSPExc,LSPInh,JBSIE,JBSII] = ...
+          CCG_jitter(res1,res2,fs,binSize,duration,'jscale',jscale, ...
+                        'plot_flag', false, ...
+                        'plot_output', get(fig_use, 'Number'), ...
+                        'njitter', njitter, 'alpha', alpha,...
+                        'for_grant', for_grant,  'plot_pointwiseBands',false);
+
+        % hcomb = figure(102);
+        [GSPExc,GSPInh,pvalE,pvalI,ccgRabove,tR,LSPExc,LSPInh,JBSIE,JBSII] = ...
+          CCG_jitter(resAboveMed,res2,fs,binSize,duration,'jscale',jscale, ...
+                        'plot_flag', false, ...
+                        'plot_output', get(fig_use, 'Number'), ...
+                        'njitter', njitter, 'alpha', alpha,...
+                        'for_grant', for_grant,  'plot_pointwiseBands',false);
+
+        % hcomb = figure(102);
+        [GSPExc,GSPInh,pvalE,pvalI,ccgRbelow,tR,LSPExc,LSPInh,JBSIE,JBSII] = ...
+          CCG_jitter(resBelowMed,res2,fs,binSize,duration,'jscale',jscale, ...
+                        'plot_flag', false, ...
+                        'plot_output', get(fig_use, 'Number'), ...
+                        'njitter', njitter, 'alpha', alpha,...
+                        'for_grant', for_grant,  'plot_pointwiseBands',false);
+        
+        for loopSurr = 1:1000 
+            [ccgRtemp, tR] = CCG([res1(surrIdx(loopSurr,:));res2],[ones(size(res1(surrIdx(loopSurr,:))));2*ones(size(res2))], ...
+                    'binSize', binSize, 'duration', duration, 'Fs', 1/fs,...
+                    'norm', 'counts');
+
+            ccgj(:,loopSurr) = ccgRtemp(:,1,2);
+        end
+
+        if strcmp(testType,'noMinus')
+
+            [aPoint, bPoint, aSim, bSim, ~, ~] = ... 
+                computeBandsV2(ccgR(:,1,2),ccgj,tR);
+
+        elseif strcmp(testType,'minus')
+
+            ccgRdiff = ccgRbelow(:,1,2)/sum(ccgRbelow(:,1,2))-ccgRabove(:,1,2)/sum(ccgRabove(:,1,2));
+            
+            ccgjDiff = [];
+            for loopSurr = 1:500
+                ccgjDiff = [ccgjDiff ccgj(:,loopSurr)/sum(ccgj(:,loopSurr)) - ccgj(:,loopSurr + 500)/sum(ccgj(:,loopSurr + 500))];
+            end
+    
+            [aPoint, bPoint, aSim, bSim, ~, ~] = ... 
+                computeBandsV2(ccgRdiff,ccgjDiff,tR);
+
+        end 
+
+        tRms = tR*1000;
+
+        if isempty(pairNo)
+
+            nexttile(4)
+            patchline(waveTimeLong,waveAboveMed(:,waveAboveMedRandIdx(1)),'EdgeColor','#D95319','LineWidth',0.25,'EdgeAlpha',1);
+            hold on
+            for k = 2:Nwaveforms
+                patchline(waveTimeLong,waveAboveMed(:,waveAboveMedRandIdx(k)),'EdgeColor','#D95319','LineWidth',0.25,'EdgeAlpha',1);
+            end
+            hold off
+            set(gca,'YDir','reverse')
+            title(['above median (n = ' num2str(size(waveAboveMed,2)) ')'])
+            
+            nexttile(6)
+            patchline(waveTimeLong,waveBelowMed(:,waveBelowMedRandIdx(1)),'EdgeColor','#EDB120','LineWidth',0.25,'EdgeAlpha',1);
+            hold on
+            for k = 2:Nwaveforms
+                patchline(waveTimeLong,waveBelowMed(:,waveBelowMedRandIdx(k)),'EdgeColor','#EDB120','LineWidth',0.25,'EdgeAlpha',1);
+            end
+            hold off
+            set(gca,'YDir','reverse')
+            title(['below median (n = ' num2str(size(waveBelowMed,2)) ')'])
+                        
+            nexttile(8)
+            plot(waveTimeLong,spikeAvgMaxChanCell1,'LineWidth',1)
+            hold on
+            plot(waveTimeLong,mean(waveAboveMed,2),'LineWidth',1);
+            plot(waveTimeLong,mean(waveBelowMed,2),'LineWidth',1);
+            hold off
+            set(gca,'YDir','reverse')
+            legend(['all (n = ' num2str(size(waveformsMaxCell1,2)) ')'], ...
+                   ['above median (n = ' num2str(size(waveAboveMed,2)) ')'], ...
+                   ['below median (n = ' num2str(size(waveBelowMed,2)) ')'])
+    
+            nexttile(10)
+    %         plot(tR*1000,ccgR(:,1,2)/2,'LineWidth',1)
+            plot(tR*1000,ccgR(:,1,2)/sum(ccgR(:,1,2)),'LineWidth',1)
+            hold on
+    %         plot(tR*1000,ccgRabove(:,1,2)*(0.5*(size(waveformsMaxCell1,2)/size(waveAboveMed,2))),'LineWidth',1)
+    %         plot(tR*1000,ccgRbelow(:,1,2)*(0.5*(size(waveformsMaxCell1,2)/size(waveBelowMed,2))),'LineWidth',1)
+            plot(tR*1000,ccgRabove(:,1,2)/sum(ccgRabove(:,1,2)),'LineWidth',1)
+            plot(tR*1000,ccgRbelow(:,1,2)/sum(ccgRbelow(:,1,2)),'LineWidth',1)
+            hold off
+            title(['normalized CCG: ' pairStr])
+            legend('all','above median','below median')
+    
+            nexttile(12)
+    %         plot(tR*1000,ccgR(:,1,1)/2,'LineWidth',1)
+            plot(tR*1000,ccgR(:,1,1)/sum(ccgR(:,1,1)),'LineWidth',1)
+            hold on
+    %         plot(tR*1000,ccgRabove(:,1,1)*(0.5*(size(waveformsMaxCell1,2)/size(waveAboveMed,2))),'LineWidth',1)
+    %         plot(tR*1000,ccgRbelow(:,1,1)*(0.5*(size(waveformsMaxCell1,2)/size(waveBelowMed,2))),'LineWidth',1)
+            plot(tR*1000,ccgRabove(:,1,1)/sum(ccgRabove(:,1,1)),'LineWidth',1)
+            plot(tR*1000,ccgRbelow(:,1,1)/sum(ccgRbelow(:,1,1)),'LineWidth',1)
+            hold off
+            title(['normalized ACG: ' num2str(cellID1) cell1type ' (ch: ' num2str(ch1) ', sh: ' num2str(shank1) ')'])
+            legend('all','above median','below median')
+    
+            nexttile(14)
+            plot(tLFP,lfpAvgMaxChanCell1,'LineWidth',1)
+            hold on
+            plot(tLFP,mean(lfpAboveMed,2),'LineWidth',1);
+            plot(tLFP,mean(lfpBelowMed,2),'LineWidth',1);
+            plot(tLFP,mean(lfpBelowMed,2)-mean(lfpAboveMed,2),'LineWidth',1);
+            hold off
+            set(gca,'YDir','reverse')
+            title('spike-triggered LFP')
+            legend('all','above median','below median','below median-above median')
+
+        else 
+            
+            if (pairNo == 8) & strcmp(dayNo,'1')
+                nexttile(2)
+            elseif pairNo == 71 & strcmp(dayNo,'2')
+                nexttile(4)
+            elseif pairNo == 20 & strcmp(dayNo,'1')
+                nexttile(10)
+            elseif pairNo == 24 & strcmp(dayNo,'1')
+                nexttile(12)
+            end
+            plot(waveTimeLong,spikeAvgMaxChanCell1,'k','LineWidth',1)
+            hold on
+            plot(waveTimeLong,mean(waveAboveMed,2),'LineWidth',1);
+            plot(waveTimeLong,mean(waveBelowMed,2),'LineWidth',1);
+            hold off
+            xlim([-1 1])
+            ylabel('[mV]')
+            xlabel('[ms]')
+            title({['Rat AG day ' dayNo ' waveform: '],refStr})
+            set(gca,'YDir','reverse')
+            % legend(['all (n = ' num2str(size(waveformsMaxCell1,2)) ')'], ...
+            %        ['above median (n = ' num2str(size(waveAboveMed,2)) ')'], ...
+            %        ['below median (n = ' num2str(size(waveBelowMed,2)) ')'])
+            box off
+            set(gca,'FontSize',5)
+            set(gca,'FontName','Arial')
+            
+            if (pairNo == 8) & strcmp(dayNo,'1')
+                nexttile(6)
+            elseif pairNo == 71 & strcmp(dayNo,'2')
+                nexttile(8)
+            elseif pairNo == 20 & strcmp(dayNo,'1')
+                nexttile(14)
+            elseif pairNo == 24 & strcmp(dayNo,'1')
+                nexttile(16)
+            end
+
+            if strcmp(testType,'noMinus')
+                %         plot(tR*1000,ccgR(:,1,2)/2,'LineWidth',1)
+                % patch([tRms; flipud(tRms)],[aSim/sum(mean(ccgj,2));   flipud(bSim/sum(mean(ccgj,2)))],   [200 200 200]/255,'EdgeAlpha',0); % simultaneous bands
+                patch([tRms; flipud(tRms)],[aPoint/sum(mean(ccgj,2)); flipud(bPoint/sum(mean(ccgj,2)))], [200 200 200]/255,'EdgeAlpha',0); % point-wise bands
+                hold on 
+                plot(tR*1000,ccgR(:,1,2)/sum(ccgR(:,1,2)),'k','LineWidth',1)
+        %         plot(tR*1000,ccgRabove(:,1,2)*(0.5*(size(waveformsMaxCell1,2)/size(waveAboveMed,2))),'LineWidth',1)
+        %         plot(tR*1000,ccgRbelow(:,1,2)*(0.5*(size(waveformsMaxCell1,2)/size(waveBelowMed,2))),'LineWidth',1)
+                plot(tR*1000,ccgRabove(:,1,2)/sum(ccgRabove(:,1,2)),'LineWidth',1)
+                plot(tR*1000,ccgRbelow(:,1,2)/sum(ccgRbelow(:,1,2)),'LineWidth',1)
+                hold off
+            elseif strcmp(testType,'minus')
+                % patch([tRms; flipud(tRms)],[aSim;   flipud(bSim)],   [200 200 200]/255,'EdgeAlpha',0); % simultaneous bands
+                patch([tRms; flipud(tRms)],[aPoint; flipud(bPoint)], [200 200 200]/255,'EdgeAlpha',0); % point-wise bands
+                hold on
+                plot(tR*1000,ccgRdiff,'k','LineWidth',1)
+                hold off
+            end 
+
+            xlim([-1 1])
+            ylabel('Spike Probability')
+            xlabel('[ms]')
+            title({['CCG: ' refStr],tarStr,newline})
+            % legend('all','above median','below median')
+            box off
+            set(gca,'FontSize',5)
+            set(gca,'FontName','Arial')
+
+        end
+        
+        %%
+        if isempty(pairNo)
+            save_file = fullfile(figpath, saveStr);
+            print(fig_use, save_file,'-dpng',resolution_use);
+
+            % reset plot
+            close 102
+    
+            hcomb = figure(102);
+            arrayfun(@(a) set(a, 'Position', pos), hcomb(:));        
+        end
+
+    end
+    
+    % close 102
+    % 
+    % %% save median split subsets
+    % save([datapath 'medSplitSets_' metric '_' state],'medSplit')
+    
+end

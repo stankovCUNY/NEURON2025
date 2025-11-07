@@ -1,0 +1,101 @@
+function [  ] = printNK( filename, varargin )
+% printNK( filename, location, ... )
+%   Prints current figure to filename in location on NORVAL as a pdf with '-bestfit'
+%   option specified.
+%
+%   Location(optional): dir to save to. Feel free to add your own shorcuts
+%   (see below for these options). pwd if left blank.
+%
+%   'hfig' (name-value pair): assumes current figure (gcf) if left unspecfied or
+%   empty
+%
+%   'append' (name-value pair): default = false; append into one file. Note
+%   that this is a .ps file that you can easily convert to a pdf with Adobe
+%   Distiller.
+%
+screen_height_in = 11; % inches: User-specific - set for proper output scaling
+screen_height_pix = 1000; % pixels, same as above
+resolution_use = '-r300'; % >= 300dpi required by Nature Neuro, so that's what I'm using.
+ip = inputParser;
+ip.addRequired('filename', @ischar);
+ip.addOptional('location', '', @ischar); % See below for valid locations
+ip.addParameter('hfig', gcf, @ishandle);
+ip.addParameter('append', false, @islogical);
+ip.parse(filename, varargin{:});
+location = ip.Results.location;
+hfig = ip.Results.hfig;
+append = ip.Results.append;
+%%
+switch location
+    case 'meeting'
+        if isempty(getenv('COMPUTERNAME'))
+            location = '/data/UM/Meeting\ Plots';
+        elseif strcmp(getenv('COMPUTERNAME'),'NATLAPTOP')
+            location = 'C:\Users\Nat\Dropbox\UM\Meeting Plots';
+        end         
+    case 'russek'
+        location = 'C:\Users\kinsky\Dropbox\Imaging Project\Presentations\Russek Day 2017\Poster';
+    case '2env'
+        location = 'J:\2env Figures - do not delete';
+%         location = 'C:\Users\kinsky.AD\Dropbox\Imaging Project\Manuscripts\2env\Figures';
+    case '2env_rot' % 2env rotation analysis figures
+        location = 'C:\Users\kinsky\Dropbox\Imaging Project\Manuscripts\2env\Figures\Rotation Analysis';
+    case 'NO'
+        location = 'C:\Users\kinsky\Dropbox\Imaging Project\Undergrads\Annalyse\plots';
+    case 'NOlaptop'
+        location = 'C:\Users\Nat\Dropbox\Imaging Project\Undergrads\Annalyse\plots';
+    case '2env_laptop'
+        location = 'C:\Users\Nat\Dropbox\Imaging Project\Manguscripts\2env\Figures';
+    case 'alt'
+        location = 'C:\Users\kinsky\Dropbox\Imaging Project\Manuscripts\Alternation\Figures';
+        if strcmpi('natlaptop', getenv('COMPUTERNAME'))
+            location = 'C:\Users\Nat\Dropbox\Imaging Project\Manuscripts\Alternation\Figures';
+        end
+    case 'cnmf'
+        location = 'C:\Users\kinsky\Dropbox\Imaging Project\MATLAB\CNMF vs T4';
+    case 'eraser'
+        location = 'C:\Users\kinsky\Dropbox\Imaging Project\Manuscripts\Eraser';
+    case 'SuFiSyn'
+        if ~exist("/home/nasko/CUNY_Work_Han_Kamran_Nat/data/wake_new",'dir')
+            location = 'C:\Users\orest\Desktop\RoyMaze1';
+        else
+            location = '/home/nasko/CUNY_Work_Han_Kamran_Nat/data/wake_new';
+        end
+    case ''
+        location = pwd;
+    otherwise
+        % Don't do anything - use input location
+end
+% set to landscape or portrait
+if hfig.Position(3) > hfig.Position(4)
+    hfig.PaperOrientation = 'landscape';
+    % Scale to custom paper size with min dimension approximately the size
+    % as shown on screen
+    aspect_ratio = hfig.Position(3)/hfig.Position(4);
+    scale_factor = hfig.Position(4)/screen_height_pix;
+    paper_dims = [round(screen_height_in*aspect_ratio,1), screen_height_in]*...
+        scale_factor;
+    hfig.PaperSize(1:2) = paper_dims;
+    hfig.PaperPosition = [0 0 paper_dims];
+    
+    %%% The code below seems to squash stuff
+    %     hfig.PaperUnits = 'normalized';
+    %     hfig.PaperPosition = [0 0 1 1];
+else
+    hfig.PaperOrientation = 'portrait';
+    aspect_ratio = hfig.Position(4)/hfig.Position(3);
+    scale_factor = hfig.Position(3)/screen_height_pix;
+    paper_dims = [screen_height_in, round(screen_height_in*aspect_ratio,1)]*...
+        scale_factor;
+    hfig.PaperSize(1:2) = paper_dims;
+    hfig.PaperPosition = [0 0 paper_dims]; % [0 0 paper_dims(1)/aspect_ratio paper_dims(2)]; %
+end
+hfig.Renderer = 'painters'; % This makes sure weird stuff doesn't happen when you save lots of data points by using openGL rendering
+save_file = fullfile(location, filename);
+if ~append
+    print(hfig, save_file, '-dpdf', resolution_use)
+elseif append
+%     arrayfun(@(a) set(a,'FontName','Arial'),hfig.Children)
+    print(hfig, save_file, '-dpsc', resolution_use, '-append');
+end
+end

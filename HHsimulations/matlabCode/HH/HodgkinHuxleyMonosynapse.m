@@ -1,0 +1,262 @@
+function HodgkinHuxleyMonosynapse(timeMin)
+    
+    tic
+
+%     close all
+    
+    time = timeMin*60; % in seconds
+
+    noiseSc = 3; % normal noise scale
+
+    Vrest = -65; % mV − change this to −65 if desired
+    dt = 1/30; % ms
+    fs  = (1/dt)*1000; % hz
+    totalTime = time*1e3; % ms
+    C = 1; % uF/cm^2
+    
+    % constants; values based on Table 1
+%     E_Na = 115 + Vrest; % mV
+%     E_K = -6 + Vrest; %mV
+%     E_Leak = 10.6 + Vrest; % mV
+%     
+%     g_Na = 120; % mS/cm^2
+%     g_K = 36; % mS/cm^2
+%     g_Leak = 0.3; % mS/cm^2
+
+    E_Na   = 55; % mV
+    E_K    = -90; %mV
+    E_Leak = -65; % mV
+    
+    g_Na = 35; % mS/cm^2
+    g_K = 9; % mS/cm^2
+    g_Leak = 0.1; % mS/cm^2
+        
+    % Vector of timesteps
+    t = [0:dt:totalTime];
+    
+    % synaptic input constants
+    tau = 30*2; % units in samples, example 30 units are 1ms for dt = 1/30 ms
+    synapseC = 0.1;
+    g_SynapseTar = 1*synapseC;
+    E_syn = 0;
+    
+    delayTar = 0*fs; % delay units are in samples, coeffirefent units are is msec
+    
+    % synapse PSP waveform
+    for i = 1:(30*30)
+        sWave(i) = s_function(i,tau);
+    end
+    sWave = [0 sWave];
+    
+    frozenNoiseRef = noiseSc*normrnd(0,1,1,length(t));
+    frozenNoiseTar = noiseSc*normrnd(0,1,1,length(t));
+    
+    % junction switch
+    juncSwitch = ones(1,length(t));
+    juncSwitch(60*fs+1:120*fs) = 0;
+    
+    %%
+    
+    % Current input −− change this to see how different inputs affect the neuron
+    I_current_ref = ones(1,length(t))*0.0;
+    I_current_tar = ones(1,length(t))*0.0;
+    
+    I_current_ref(50/dt:end)          = 5; % Input of 3 microA/cm2 beginning at 50 ms and steady until end of time period.
+    I_current_tar((2*60*1000)/dt:end) = 5; % Input of 3 microA/cm2 beginning at 50 ms and steady until end of time period.
+    
+    % add noise
+    I_current_ref = I_current_ref + frozenNoiseRef;
+    I_current_tar = I_current_tar + frozenNoiseTar;
+    
+    % initializing values
+    Vref(1) = Vrest; % membrane potential is starting at its resting state
+    Vtar(1) = Vrest;
+    s(1)    = 0; % initial synaptic gain
+    
+    % separate functions to get the alpha and beta values
+    [alphaMref, betaMref] = m_equations(Vref(1), Vref);
+    [alphaNref, betaNref] = n_equations(Vref(1), Vref);
+    [alphaHref, betaHref] = h_equations(Vref(1), Vref);
+    
+    [alphaMtar, betaMtar] = m_equations(Vtar(1), Vrest);
+    [alphaNtar, betaNtar] = n_equations(Vtar(1), Vrest);
+    [alphaHtar, betaHtar] = h_equations(Vtar(1), Vrest);
+    
+    % initializing gating variables to the asymptotic values when membrane potential
+    % is set to the membrane resting value based on equation 13
+    mRef(1) = (alphaMref / (alphaMref + betaMref));
+    nRef(1) = (alphaNref / (alphaNref + betaNref));
+    hRef(1) = (alphaHref / (alphaHref + betaHref));
+    
+    mTar(1) = (alphaMtar / (alphaMtar + betaMtar));
+    nTar(1) = (alphaNtar / (alphaNtar + betaNtar));
+    hTar(1) = (alphaHtar / (alphaHtar + betaHtar));
+    
+    % solve for common input spike times
+    for i = 1:length(t)
+        
+        % calculate new alpha and beta based on last known membrane potenatial
+        [alphaMref, betaMref]   = m_equations(Vref(i), Vrest);
+        [alphaNref, betaNref]   = n_equations(Vref(i), Vrest);
+        [alphaHref, betaHref]   = h_equations(Vref(i), Vrest);
+        
+        % conductance variables − computed separately to show how this
+        % changes with membrane potential in one of the graphs
+        conductance_K_Ref(i)   = g_K*(nRef(i)^4);
+        conductance_Na_Ref(i)  = g_Na*(mRef(i)^3)*hRef(i);
+        
+        % retrieving ionic currents
+        I_Na_Ref(i)   = conductance_Na_Ref(i)*(Vref(i)-E_Na);
+        I_K_Ref(i)    = conductance_K_Ref(i)*(Vref(i)-E_K);
+        I_Leak_Ref(i) = g_Leak*(Vref(i)-E_Leak);
+        
+        % Calculating the input
+        Input_Ref  = I_current_ref(i) - (I_Na_Ref(i) + I_K_Ref(i) + I_Leak_Ref(i));
+        
+        % Calculating the new membrane potential
+%         Vref(i+1)  = Vref(i)*(1 + frozenNoiseRef(i))  + Input_Ref*  dt*(1/C);
+        Vref(i+1)  = Vref(i)  + Input_Ref*dt*(1/C); 
+        
+        % getting new values for the gating variables
+        mRef(i+1)  = mRef(i) + (alphaMref *(1-mRef(i)) - betaMref * mRef(i))*dt;
+        nRef(i+1)  = nRef(i) + (alphaNref *(1-nRef(i)) - betaNref * nRef(i))*dt;
+        hRef(i+1)  = hRef(i) + (alphaHref *(1-hRef(i)) - betaHref * hRef(i))*dt;
+        
+    end
+    
+    % spike times
+    thresh   = 0;    % volts
+    distance = 50;   % samples
+    [~,spikeTimesRef] = findpeaks(Vref,'MinPeakHeight',thresh,'MinPeakDistance',distance);
+    
+    % s function for all timesteps
+    sTar = zeros(1,length(t));
+    
+    sTar(spikeTimesRef + delayTar) = 1;
+    
+    sTar = conv(sTar,sWave);
+    sTar = sTar(1:length(t));
+    
+    % repeat for time determined in totalTime , by each dt
+    for i = 1:length(t)
+        
+        % calculate new alpha and beta based on last known membrane potenatial
+        [alphaMtar, betaMtar] = m_equations(Vtar(i), Vrest);
+        [alphaNtar, betaNtar] = n_equations(Vtar(i), Vrest);
+        [alphaHtar, betaHtar] = h_equations(Vtar(i), Vrest);
+        
+        % conductance variables − computed separately to show how this
+        % changes with membrane potential in one of the graphs
+        conductance_K_tar(i)  = g_K*(nTar(i)^4);
+        conductance_Na_tar(i) = g_Na*(mTar(i)^3)*hTar(i);
+        
+        % retrieving ionic currents
+        I_Na_tar(i)   = conductance_Na_tar(i)*(Vtar(i)-E_Na);
+        I_K_tar(i)    = conductance_K_tar(i)*(Vtar(i)-E_K);
+        I_Leak_tar(i) = g_Leak*(Vtar(i)-E_Leak);
+        
+        % synaptic input currents
+        I_Ref_tar(i) = g_SynapseTar*sTar(i)*(Vtar(i)-E_syn);
+        
+        % Calculating the input
+        Input_tar = I_current_tar(i) - juncSwitch(i)*I_Ref_tar(i) - (I_Na_tar(i) + I_K_tar(i) + I_Leak_tar(i));
+        
+        % Calculating the new membrane potential
+%         Vtar(i+1) = Vtar(i)*(1 + frozenNoiseTar(i)) + Input_tar* dt*(1/C);
+        Vtar(i+1) = Vtar(i) + Input_tar*dt*(1/C);
+        
+        % getting new values for the gating variables
+        mTar(i+1) = mTar(i) + (alphaMtar *(1-mTar(i)) - betaMtar * mTar(i))*dt;
+        nTar(i+1) = nTar(i) + (alphaNtar *(1-nTar(i)) - betaNtar * nTar(i))*dt;
+        hTar(i+1) = hTar(i) + (alphaHtar *(1-hTar(i)) - betaHtar * hTar(i))*dt;
+        
+    end
+    
+    % spike times
+    thresh   = 0;    % volts
+    distance = 50;   % samples
+    [~,spikeTimesTar] = findpeaks(Vtar,'MinPeakHeight',thresh,'MinPeakDistance',distance);
+        
+    %%
+    
+    Duration = 0.100;
+    
+    spikeTimesRef = spikeTimesRef'/fs;
+    spikeTimesTar = spikeTimesTar'/fs;
+    
+    refFR = length(spikeTimesRef)/(spikeTimesRef(end)-spikeTimesRef(1));
+    tarFR = length(spikeTimesTar)/(spikeTimesTar(end)-spikeTimesTar(1));
+   
+    [ccg,tR] = CCG([spikeTimesRef;spikeTimesTar],[ones(size(spikeTimesRef));2*ones(size(spikeTimesTar))], ...
+                    'binSize', 1/fs, 'duration', Duration, 'Fs', 1/fs, ...
+                    'norm', 'counts');
+
+    filterFlag   = false; 
+    noDemeanFlag = true;
+    fpass        = 300;
+    preLength    = 5*30;
+    postLength   = 5*30;
+    PSP          = waveformAvg(Vtar',spikeTimesRef(spikeTimesRef < 60)*fs,preLength,postLength,fpass,fs,filterFlag,noDemeanFlag);            
+    ylims = get(gca,'ylim');
+    ylabel('Probability')
+    xlabel('[ms]')
+    
+%     tiledlayout(3,1)
+    
+    nexttile(2) 
+    plot(tR*1e3,ccg(:,1,2)/length(spikeTimesRef),'k','LineWidth',1)
+    ylims = get(gca,'ylim');
+    text(-0.9*5,0.9*ylims(2),{['ref ' num2str(refFR,'%.1f') 'hz'];['tar ' num2str(tarFR,'%.1f') 'hz']},'FontSize',5)
+    xlim([-5 5])
+    xlabel('[ms]')
+    ylabel('Prob.')
+%     title('R v T')
+    set(gca,'FontSize',5)
+    set(gca,'FontName','Arial')
+    box off
+    
+    nexttile(6)
+    plot((-(preLength-1):postLength)*dt,PSP*1000,'LineWidth',1) 
+%     xlim([0 2000])
+    xlabel('[ms]')
+    ylabel('Vm [mV]')
+% 	title('pulse')
+    set(gca,'FontSize',5)
+    set(gca,'FontName','Arial')
+%     set(gca, 'YDir','reverse')
+    box off
+    
+    nexttile(10)
+    plot((-(preLength-1):(postLength-1))*dt,33*diff(PSP)*1000,'-.','LineWidth',1,'color',"#0072BD")
+%     xlim([0 2000])
+    xlabel('[ms]')
+    ylabel('dVm/dt [mV/ms]')
+%     title('d(pulse)/dt')
+    set(gca,'FontSize',5)
+    set(gca,'FontName','Arial')
+    box off
+    
+end
+
+% calculate alpha m and beta m based on Table 2
+function [alpha_m, beta_m] = m_equations(V, Vrest)
+    alpha_m = (2.5-0.1*(V-Vrest))/(exp(2.5-0.1*(V-Vrest))-1);
+    beta_m = 4*exp((Vrest-V)/18);
+end
+
+% calculate alpha n and beta n based on Table 2
+function [alpha_n, beta_n] = n_equations(V, Vrest)
+    alpha_n = (0.1-0.01*(V-Vrest))/(exp(1-0.1*(V-Vrest))-1);
+    beta_n = 0.125*exp((Vrest-V)/80);
+end
+
+% calculate alpha h and beta h based on Table 2
+function [alpha_h, beta_h] = h_equations(V, Vrest)
+    alpha_h = 0.07*exp((Vrest-V)/20);
+    beta_h = 1/(1+exp(3-0.1*(V-Vrest)));
+end
+
+% synaptic gating alpha function (David Heeger: https://www.cns.nyu.edu/~david/handouts/synapse.pdf)
+function s = s_function(t,tau)
+    s = (t/tau)*exp(-(t/tau));
+end

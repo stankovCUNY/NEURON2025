@@ -1,0 +1,38 @@
+% QIF Neuron Simulation in MATLAB
+% Parameters
+C = 1;            % Capacitance
+I = 0.5;          % Input current
+V_r = -65;        % Reset potential
+V_peak = 30;      % Peak potential
+a = 0.02;         % Recovery variable parameter
+b = 0.2;          % Recovery variable parameter
+c = -65;          % Reset value of V
+d = 2;            % Reset value of u
+
+% Simulation parameters
+T = 1000;          % Total simulation time
+dt = 0.1;         % Time step
+time = 0:dt:T;    % Time vector
+
+% Variables
+V = V_r * ones(size(time));  % Membrane potential
+u = 0 * ones(size(time));    % Recovery variable
+
+% Simulation loop
+for t = 2:length(time)
+    if V(t-1) >= V_peak
+        V(t-1) = V_peak;     % Spike
+        V(t) = c;            % Reset membrane potential
+        u(t) = u(t-1) + d;   % Reset recovery variable
+    else
+        V(t) = V(t-1) + dt * (0.04 * V(t-1)^2 + 5 * V(t-1) + 140 - u(t-1) + I) / C;
+        u(t) = u(t-1) + dt * a * (b * V(t-1) - u(t-1));
+    end
+end
+
+% Plot results
+figure;
+plot(time, V);
+xlabel('Time (ms)');
+ylabel('Membrane Potential (mV)');
+title('Quadratic Integrate-and-Fire Neuron');

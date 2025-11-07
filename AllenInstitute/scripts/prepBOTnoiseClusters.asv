@@ -1,0 +1,84 @@
+function prepBOTnoiseClusters
+    
+    %load CSVs
+%     unitsCSV    = importUnitsCSV;
+%     channelsCSV = importChannelsCSV;
+%     probesCSV   = importProbesCSV;
+
+    % copied code from https://www.mathworks.com/matlabcentral/fileexchange/90900-brain-observatory-toolbox
+    
+    savePath          = '/media/nasko/3ce6d8b6-2570-4c8f-941f-9b4b0641301c/home/nasko/CUNY_Work_Han_Kamran_BOT/data/';
+    allUnitsPath      = '/media/nasko/WD_BLACK4/spikeTimesAllUnits/';
+    unionClustersPath = '/media/nasko/WD_BLACK4/unionClusters/';
+    
+    % obtain all sessions in the ephys dataset
+    sessions = bot.listSessions('ephys');
+  
+    animalsList = sessions.id;
+    
+    %% all probes
+    
+    for loopAnimal = 1:length(animalsList)
+        
+        display([num2str((loopAnimal/length(animalsList))*100) '% done'])
+        
+        animalID = double(animalsList(loopAnimal));
+        
+        session = bot.getSessions(sessions(sessions.id == animalID, :));
+        
+        % prep invalid unit list of spike times
+        allUnitsSpikeTimesList   = load([allUnitsPath 'spikeTimes_mouse_' num2str(animalID)]);
+        allUnitsSpikeTimesIDList = load([allUnitsPath 'unitID_mouse_'     num2str(animalID)]);
+        allUnitsParameterData    = load([allUnitsPath 'unitData_'         num2str(animalID)]);
+        
+        invalidUnitsIDList = unique(allUnitsSpikeTimesIDList.unitID)';
+        
+        allUnits = table;
+        
+        for loopUnits = 1:length(invalidUnitsIDList)
+            
+            allUnits.id(loopUnits)         = invalidUnitsIDList(loopUnits);
+            allUnits.spikeTimes{loopUnits} = allUnitsSpikeTimesList.spikeTimes(allUnitsSpikeTimesIDList.unitID == invalidUnitsIDList(loopUnits));
+            allUnits.probeName{loopUnits}  = allUnitsParameterData.unitData.probe_description(loopUnits,:);
+            
+        end
+        
+        [~,invalidUnitIdx] = setdiff(allUnits.id,double(session.units.id));
+        invalidUnits = allUnits(invalidUnitIdx,:);
+        
+        % valid units
+        validUnitIdx = zeros(size(allUnits.id,1),1);
+        validUnitIdx(invalidUnitIdx) = 1;
+        validUnitIdx = find(~validUnitIdx);
+       
+        validUnits = allUnits(validUnitIdx,:);
+                
+        probeList = unique(allUnits.probeName);
+        
+        for loopProbes = 1:length(probeList)
+            
+            invalidUnitsProbe = invalidUnits(strcmp(invalidUnits.probeName,probeList{loopProbes}),:);
+            validUnitsProbe   = validUnits(  strcmp(validUnits.probeName,  probeList{loopProbes}),:);
+            
+            invalidCluster.spikeTimes = []; 
+            invalidCluster.spikeInd   = []; 
+
+            for loopUnits = 1:size(invalidUnitsProbe,1) 
+                invalidCluster.spikeTimes = [invalidUnitsProbe.spikeTimes{loopUnits}'; invalidCluster.spikeTimes];
+                invalidCluster.spikeInd   = [ones(length(invalidUnitsProbe.spikeTimes{loopUnits}),1)*(invalidUnitsProbe.id(loopUnits)); invalidCluster.spikeInd];
+            end
+            
+            validCluster.spikeTimes = []; 
+            validCluster.spikeInd   = []; 
+            
+            for loopUnits = 1:size(validUnitsProbe,1) 
+                validCluster.spikeTimes = [validUnitsProbe.spikeTimes{loopUnits}'; invalidCluster.spikeTimes];
+                validCluster.spikeInd   = [ones(length(validUnitsProbe.spikeTimes{loopUnits}),1)*(validUnitsProbe.id(loopUnits)); invalidCluster.spikeInd];
+            end
+            
+            
+            
+        end
+        
+    end
+end
